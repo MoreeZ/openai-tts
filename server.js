@@ -6,13 +6,15 @@ const path = require('path');
 const { Readable } = require('stream');
 const { Buffer } = require('buffer');
 const net = require('net');
+const fs = require('fs');
+const { access, mkdir } = require('fs/promises');
 
 const app = express();
 const defaultPort = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static('public'));
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Custom console logger with timestamps
 const logger = {
@@ -26,10 +28,9 @@ const logger = {
     }
 };
 
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY
-});
-logger.log("TOKENS: process.env.MAX_SUMMARY_OUTPUT_TOKENS", process.env.MAX_SUMMARY_OUTPUT_TOKENS)
+// Create OpenAI client - will be initialized with API key from request
+let openai = null;
+
 // Environment variables with defaults
 const GPT_MODEL = process.env.GPT_MODEL || 'gpt-4o-2024-08-06';
 const MAX_SUMMARY_INPUT_LENGTH = parseInt(process.env.MAX_SUMMARY_INPUT_LENGTH || '300000');
@@ -44,7 +45,7 @@ const MAX_TTS_LENGTH = 4096;
 const RATE_LIMIT = {
     tokensPerMinute: 3,
     maxConcurrent: 2, // Reduce from 3 to 2 concurrent requests
-    refillIntervalMs: 60000 / 2, // Refill a token every 30 seconds (more conservative)
+    refillIntervalMs: 60000 / 2, // Refill a token every 30 seconds (more conservative),
 };
 
 // Simple rate limiter for controlling concurrent API access
@@ -73,7 +74,7 @@ class RateLimiter {
         }
     }
 
-    async executeWithRateLimit(fn) {
+    async schedule(fn) {
         // If we have available tokens, process immediately
         if (this.availableTokens > 0) {
             this.availableTokens--;
@@ -142,9 +143,9 @@ class RateLimiter {
 // Create a rate limiter for OpenAI API calls
 const apiRateLimiter = new RateLimiter(RATE_LIMIT.maxConcurrent);
 
-// Global status tracking
-const processingStatus = {
-    currentStatus: 'idle',
+// Processing status tracking
+let processingStatus = {
+    currentStatus: 'Idle',
     summaryProgress: 0,
     totalChunks: 0,
     processedChunks: 0,
@@ -204,7 +205,7 @@ async function processChunk(chunk, index, totalChunks) {
     logger.log(`Queuing chunk ${index + 1}/${totalChunks} (${chunk.length} characters)...`);
     processingStatus.queuedChunks++;
     
-    return apiRateLimiter.executeWithRateLimit(async () => {
+    return apiRateLimiter.schedule(async () => {
         const chunkStartTime = Date.now();
         logger.log(`Starting processing of chunk ${index + 1}/${totalChunks} (${chunk.length} characters)...`);
         processingStatus.currentStatus = `Processing chunk ${index + 1}/${totalChunks}`;
@@ -234,131 +235,196 @@ async function processChunk(chunk, index, totalChunks) {
 }
 
 // Function to generate a detailed summary using GPT model
-async function generateSummary(text) {
-    logger.log(`Generating summary for text of length ${text.length} characters...`);
-    processingStatus.currentStatus = 'Generating summary with GPT model';
-    processingStatus.summaryProgress = 10; // Starting progress
-    
-    if (text.length > MAX_SUMMARY_INPUT_LENGTH) {
-        logger.log(`Text exceeds maximum length for summarization (${MAX_SUMMARY_INPUT_LENGTH} characters). Truncating...`);
-        text = text.substring(0, MAX_SUMMARY_INPUT_LENGTH);
-    }
-    
-    const summaryStartTime = Date.now();
-    
+async function generateSummary(text, apiKey) {
     try {
-        processingStatus.summaryProgress = 30; // Progress update
-        const completion = await openai.chat.completions.create({
+        // Initialize OpenAI with the provided API key
+        const client = new OpenAI({
+            apiKey: apiKey
+        });
+        
+        logger.log(`Generating summary for ${text.length} characters of text...`);
+        
+        let summaryProgress = 0;
+        const updateProgress = (progress) => {
+            summaryProgress = progress;
+            processingStatus.summaryProgress = progress;
+        };
+        
+        updateProgress(10);
+        
+        // Call the OpenAI API to generate a summary
+        const completion = await client.chat.completions.create({
             model: GPT_MODEL,
             messages: [
                 {
                     role: "system",
-                    content: "You are a highly skilled summarizer. Create a detailed and comprehensive summary of the provided text. Maintain the key information, main arguments, and important details while condensing the content. The summary should be thorough enough that someone reading only your summary would understand all the important aspects of the original text."
+                    content: `You are a helpful assistant that creates detailed summaries of text. 
+                    Your summary should be comprehensive and capture all the key points, 
+                    but more concise than the original text. Aim to reduce the length by at least 50%.
+                    Maintain the original tone and style where possible.`
                 },
                 {
                     role: "user",
-                    content: text
+                    content: `Please summarize the following text. Keep all important details and key points:
+                    
+                    ${text}`
                 }
             ],
-            max_tokens: MAX_SUMMARY_OUTPUT_TOKENS,
-            temperature: 0.7,
+            max_tokens: MAX_SUMMARY_OUTPUT_TOKENS
         });
         
-        processingStatus.summaryProgress = 90; // Almost done
+        updateProgress(100);
+        
+        // Extract the summary from the API response
         const summary = completion.choices[0].message.content;
-        const summaryProcessTime = (Date.now() - summaryStartTime) / 1000;
-        
-        logger.log(`Summary generated in ${summaryProcessTime.toFixed(2)} seconds`);
-        logger.log(`Original text: ${text.length} characters, Summary: ${summary.length} characters`);
-        
-        processingStatus.summaryProgress = 100; // Complete
-        processingStatus.currentStatus = 'Summary generation complete, preparing for TTS processing';
+        logger.log(`Summary generated. Original: ${text.length} chars, Summary: ${summary.length} chars`);
         
         return summary;
     } catch (error) {
         logger.error('Error generating summary:', error);
-        processingStatus.currentStatus = 'Error generating summary';
-        throw new Error('Failed to generate summary');
+        throw error;
     }
 }
 
-// Endpoint to get current processing status
+// API endpoint to get server configuration
+app.get('/api/config', (req, res) => {
+    res.json({
+        gptModel: GPT_MODEL,
+        maxSummaryInputLength: MAX_SUMMARY_INPUT_LENGTH,
+        maxSummaryOutputTokens: MAX_SUMMARY_OUTPUT_TOKENS,
+        inputCostPerMillion: SUMMARISER_INPUT_COST_1M,
+        outputCostPerMillion: SUMMARIZER_OUTPUT_COST_1M
+    });
+});
+
+// API endpoint to get current processing status
 app.get('/api/status', (req, res) => {
     res.json(processingStatus);
 });
 
-app.post('/text-to-speech', async (req, res) => {
-    logger.log('Received text-to-speech request');
-    const startTime = Date.now();
-    
-    // Reset status for new request
-    processingStatus.currentStatus = 'Starting text-to-speech processing';
-    processingStatus.summaryProgress = 0;
-    processingStatus.totalChunks = 0;
-    processingStatus.processedChunks = 0;
-    processingStatus.queuedChunks = 0;
-    
+// Process a text-to-speech request
+app.post('/api/tts', async (req, res) => {
     try {
-        let { text, useSummary } = req.body;
-        logger.log(`Original text length: ${text.length} characters, Use Summary: ${useSummary}`);
+        const { text, useSummary, apiKey } = req.body;
         
-        // 1. Remove all newlines from the text
-        text = text.replace(/\n/g, ' ').trim();
-        logger.log(`Text after newline removal: ${text.length} characters`);
-        
-        // 2. Generate summary if requested
-        let processedText = text;
-        if (useSummary) {
-            logger.log('Generating summary before TTS processing...');
-            processedText = await generateSummary(text);
+        if (!text) {
+            return res.status(400).json({ error: 'No text provided' });
         }
         
-        // 3. Split text into chunks smaller than MAX_TTS_LENGTH
-        const chunks = splitTextIntoChunks(processedText, MAX_TTS_LENGTH);
+        if (!apiKey) {
+            return res.status(400).json({ error: 'No API key provided' });
+        }
+        
+        // Initialize OpenAI client with the provided API key
+        openai = new OpenAI({
+            apiKey: apiKey
+        });
+        
+        // Reset processing status
+        processingStatus = {
+            currentStatus: 'Starting process',
+            summaryProgress: 0,
+            totalChunks: 0,
+            processedChunks: 0,
+            queuedChunks: 0
+        };
+        
+        // Process the text (either directly or via summary)
+        let textToProcess = text;
+        
+        if (useSummary) {
+            processingStatus.currentStatus = 'Generating summary with GPT model';
+            logger.log(`Generating summary using ${GPT_MODEL}...`);
+            
+            // Truncate if text is too long
+            if (text.length > MAX_SUMMARY_INPUT_LENGTH) {
+                textToProcess = text.substring(0, MAX_SUMMARY_INPUT_LENGTH);
+                logger.log(`Text truncated to ${MAX_SUMMARY_INPUT_LENGTH} characters for summarization`);
+            }
+            
+            // Generate summary
+            const summary = await generateSummary(textToProcess, apiKey);
+            textToProcess = summary;
+            
+            processingStatus.currentStatus = 'Summary generation complete, preparing for TTS processing';
+            logger.log('Summary generated. Length:', textToProcess.length);
+        }
+        
+        // Split text into chunks if needed
+        const chunks = splitTextIntoChunks(textToProcess, MAX_TTS_LENGTH);
         processingStatus.totalChunks = chunks.length;
+        processingStatus.queuedChunks = chunks.length;
         
-        // 4. Process all chunks concurrently while maintaining order
-        logger.log(`Processing ${chunks.length} chunks with rate limiting...`);
-        processingStatus.currentStatus = `Preparing to process ${chunks.length} chunks for text-to-speech`;
+        logger.log(`Processing ${chunks.length} chunks...`);
         
-        const processingPromises = chunks.map((chunk, index) => 
-            processChunk(chunk, index, chunks.length)
-        );
+        // Process all chunks and collect audio buffers
+        const audioBuffers = [];
+        for (let i = 0; i < chunks.length; i++) {
+            processingStatus.currentStatus = `Processing chunk ${i + 1} of ${chunks.length}`;
+            
+            try {
+                // Process the chunk with rate limiting
+                const audioBuffer = await apiRateLimiter.schedule(() => processText(chunks[i], apiKey));
+                audioBuffers.push(audioBuffer);
+                
+                processingStatus.processedChunks++;
+                processingStatus.queuedChunks--;
+                processingStatus.currentStatus = `Processed chunk ${i + 1} of ${chunks.length}`;
+                
+                logger.log(`Chunk ${i + 1}/${chunks.length} processed`);
+            } catch (error) {
+                logger.error(`Error processing chunk ${i + 1}:`, error);
+                throw new Error(`Error processing chunk ${i + 1}: ${error.message}`);
+            }
+        }
         
-        // Wait for all chunks to be processed
-        logger.log(`Waiting for all ${chunks.length} chunks to complete processing...`);
-        const audioBuffers = await Promise.all(processingPromises);
-        logger.log(`All ${chunks.length} chunks have been processed successfully`);
-        
-        // 5. Combine the audio responses in the correct order (maintained by Promise.all)
+        // Combine all audio buffers
         logger.log('Combining audio chunks...');
         processingStatus.currentStatus = 'Combining audio chunks';
         const combinedBuffer = concatAudioBuffers(audioBuffers);
         
-        // Send the combined audio back to the client
+        // Set the status to complete
         processingStatus.currentStatus = 'Complete';
-        res.set('Content-Type', 'audio/mpeg');
-        res.send(combinedBuffer);
         
-        const totalProcessTime = (Date.now() - startTime) / 1000;
-        logger.log(`Request completed in ${totalProcessTime.toFixed(2)} seconds, sent ${combinedBuffer.length} bytes`);
+        // Return the audio data directly as a response
+        res.set('Content-Type', 'audio/mpeg');
+        return res.send(Buffer.from(combinedBuffer));
+        
     } catch (error) {
-        logger.error('Error in text-to-speech processing:', error);
-        processingStatus.currentStatus = `Error: ${error.message}`;
-        res.status(500).json({ error: 'Failed to convert text to speech' });
+        logger.error('Error processing text:', error);
+        return res.status(500).json({ error: `Error processing text: ${error.message}` });
     }
 });
 
-// Endpoint to get the config values for the frontend
-app.get('/api/config', (req, res) => {
-    res.json({
-        maxSummaryInputLength: MAX_SUMMARY_INPUT_LENGTH,
-        maxSummaryOutputTokens: MAX_SUMMARY_OUTPUT_TOKENS,
-        gptModel: GPT_MODEL,
-        summariserInputCost1M: SUMMARISER_INPUT_COST_1M,
-        summarizerOutputCost1M: SUMMARIZER_OUTPUT_COST_1M
-    });
+// Legacy endpoint for backward compatibility
+app.post('/api/convert', (req, res) => {
+    logger.log('Received request to legacy endpoint, forwarding to /api/tts');
+    req.url = '/api/tts';
+    app.handle(req, res);
 });
+
+// Process a chunk of text into speech
+async function processText(text, apiKey) {
+    try {
+        // Initialize OpenAI with the provided API key
+        const client = new OpenAI({
+            apiKey: apiKey
+        });
+        
+        const mp3 = await client.audio.speech.create({
+            model: "tts-1",
+            voice: "alloy",
+            input: text,
+        });
+        
+        // Convert the response to a buffer
+        const buffer = Buffer.from(await mp3.arrayBuffer());
+        return buffer;
+    } catch (error) {
+        logger.error('Error in processText:', error);
+        throw error;
+    }
+}
 
 app.get('/', (req, res) => {
     logger.log('Serving index.html');
@@ -371,7 +437,6 @@ app.get('/', (req, res) => {
         const port = await findAvailablePort(defaultPort);
         app.listen(port, () => {
             logger.log(`Server running at http://localhost:${port}`);
-            logger.log(`OpenAI API Key configured: ${process.env.OPENAI_API_KEY ? 'Yes' : 'No'}`);
             logger.log(`GPT Model: ${GPT_MODEL}`);
             logger.log(`Max Summary Input Length: ${MAX_SUMMARY_INPUT_LENGTH} characters`);
             logger.log(`Max Summary Output Tokens: ${MAX_SUMMARY_OUTPUT_TOKENS} tokens`);

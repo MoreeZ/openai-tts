@@ -1,4 +1,5 @@
 document.addEventListener('DOMContentLoaded', async () => {
+    // DOM elements
     const textInput = document.getElementById('textInput');
     const convertBtn = document.getElementById('convertBtn');
     const status = document.getElementById('status');
@@ -7,13 +8,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     const costCalculator = document.getElementById('costCalculator');
     const costToggle = document.getElementById('costToggle');
     const costDetails = document.getElementById('costDetails');
-    const costDetailsTable = document.getElementById('costDetailsTable');
     const summaryToggle = document.getElementById('summaryToggle');
     const modeLabel = document.getElementById('modeLabel');
     const modeDescription = document.getElementById('modeDescription');
     const timeEstimateElement = document.getElementById('timeEstimate');
     const timeRemainingElement = document.getElementById('timeRemaining');
-
+    const apiKeyInput = document.getElementById('apiKey');
+    const toggleApiKeyBtn = document.getElementById('toggleApiKey');
+    
     // Constants for character limits - will be updated from server
     let VERBATIM_CHAR_LIMIT = 4096;
     let SUMMARY_CHAR_LIMIT = 300000;
@@ -32,13 +34,41 @@ document.addEventListener('DOMContentLoaded', async () => {
     let SUMMARY_TOTAL_COST_PER_TOKEN = SUMMARY_INPUT_COST_PER_TOKEN + SUMMARY_OUTPUT_COST_PER_TOKEN;
     let SUMMARY_COST_PER_CHAR = SUMMARY_TOTAL_COST_PER_TOKEN / AVG_CHARS_PER_TOKEN;
     
-    // Track current mode
+    // State variables
     let useSummaryMode = false;
-    let currentCharLimit = VERBATIM_CHAR_LIMIT;
+    let currentCharLimit = VERBATIM_CHAR_LIMIT; 
     let costDetailsVisible = false;
     let gptModel = '';
     let statusPollingInterval;
     let processingStartTime;
+    
+    // API Key handling
+    const API_KEY_STORAGE_KEY = 'openai_api_key';
+    
+    // Load API key from localStorage if available
+    if (localStorage.getItem(API_KEY_STORAGE_KEY)) {
+        apiKeyInput.value = localStorage.getItem(API_KEY_STORAGE_KEY);
+    }
+    
+    // Toggle API key visibility
+    toggleApiKeyBtn.addEventListener('click', function() {
+        if (apiKeyInput.type === 'password') {
+            apiKeyInput.type = 'text';
+            toggleApiKeyBtn.textContent = 'Hide';
+        } else {
+            apiKeyInput.type = 'password';
+            toggleApiKeyBtn.textContent = 'Show';
+        }
+    });
+    
+    // Save API key to localStorage when it changes
+    apiKeyInput.addEventListener('change', function() {
+        if (apiKeyInput.value.trim()) {
+            localStorage.setItem(API_KEY_STORAGE_KEY, apiKeyInput.value.trim());
+        } else {
+            localStorage.removeItem(API_KEY_STORAGE_KEY);
+        }
+    });
 
     // Time estimation constants
     const AVERAGE_CHUNK_PROCESSING_TIME = 45; // seconds per chunk
@@ -298,12 +328,18 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     convertBtn.addEventListener('click', async () => {
         const text = textInput.value.trim();
+        const apiKey = apiKeyInput.value.trim();
         
         if (!text) {
             status.textContent = 'Please enter some text first.';
             return;
         }
-
+        
+        if (!apiKey) {
+            status.textContent = 'Please enter your OpenAI API key.';
+            return;
+        }
+        
         // Check if text exceeds the summary limit when in summary mode
         if (useSummaryMode && text.length > SUMMARY_CHAR_LIMIT) {
             if (!confirm(`Your text exceeds the ${SUMMARY_CHAR_LIMIT.toLocaleString()} character limit for summarization. The text will be truncated. Continue?`)) {
@@ -313,26 +349,37 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         try {
             status.textContent = useSummaryMode ? 
-                `Preparing to summarize text with ${gptModel}...` : 
-                'Preparing to convert text to speech...';
+                'Generating summary and converting to speech...' : 
+                'Converting text to speech...';
+            
             convertBtn.disabled = true;
+            audioPlayer.style.display = 'none';
             
             // Start polling for status updates
             startStatusPolling();
             
-            const response = await fetch('/text-to-speech', {
+            // Save the API key to localStorage
+            localStorage.setItem(API_KEY_STORAGE_KEY, apiKey);
+            
+            // Prepare the request
+            const requestData = {
+                text,
+                apiKey,
+                useSummary: useSummaryMode
+            };
+            
+            // Send the request
+            const response = await fetch('/api/tts', {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json',
+                    'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({ 
-                    text,
-                    useSummary: useSummaryMode
-                }),
+                body: JSON.stringify(requestData)
             });
 
             if (!response.ok) {
-                throw new Error('Failed to convert text to speech');
+                const errorData = await response.json();
+                throw new Error(errorData.error || 'Failed to convert text to speech');
             }
 
             const audioBlob = await response.blob();
@@ -340,6 +387,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             
             audioPlayer.src = audioUrl;
             audioPlayer.style.display = 'block';
+            audioPlayer.disabled = false;
             status.textContent = 'Conversion complete! Click play to listen.';
             
             // Clean up the previous audio URL if it exists
@@ -350,7 +398,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 audioPlayer.dataset.previousUrl = audioUrl;
             };
         } catch (error) {
-            status.textContent = 'Error: Failed to convert text to speech.';
+            status.textContent = `Error: ${error.message || 'Failed to convert text to speech.'}`;
             logger.error('Error:', error);
             stopStatusPolling();
         } finally {
@@ -383,6 +431,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                 updateStatusDisplay(status);
                 updateQueueStatus(status);
                 updateTimeRemaining(status);
+                
+                // If processing is complete, stop polling
+                if (status.currentStatus === 'Complete') {
+                    stopStatusPolling();
+                }
             } catch (error) {
                 console.error('Error fetching status:', error);
             }
@@ -399,7 +452,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         // Hide the queue status container when done
         document.getElementById('queueStatusContainer').style.display = 'none';
     }
-    
+
     // Update the queue status display
     function updateQueueStatus(status) {
         // Update the queue status indicators
@@ -465,8 +518,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
         
         // If all chunks are processed
-        if (status.processedChunks >= status.totalChunks) {
-            timeRemainingElement.textContent = 'Almost done...';
+        if (status.processedChunks >= status.totalChunks && status.totalChunks > 0) {
+            timeRemainingElement.textContent = 'Processing complete';
             return;
         }
         

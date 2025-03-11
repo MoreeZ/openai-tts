@@ -21,6 +21,8 @@ A web application that converts text to speech using OpenAI's Text-to-Speech API
 - **Cost visualization** - Detailed breakdown of cost calculations for transparency
 - **Real-time queue status** - Visual indicator showing processing progress and queue status
 - **Automatic retry** - Automatically handles rate limit errors with smart backoff and retry logic
+- **Processing time estimation** - Shows estimated processing time before submission and live updates during processing
+- **Client-side API key** - Users can input their own OpenAI API key directly in the browser
 
 ## Technologies Used
 
@@ -55,10 +57,8 @@ Before running this application, you need:
    npm install
    ```
 
-3. Create a `.env` file in the root directory and add your OpenAI API key and configuration:
+3. Create a `.env` file in the root directory and add your configuration:
    ```
-   OPENAI_API_KEY=your_api_key_here
-   
    # Server Configuration
    PORT=3000
    
@@ -88,15 +88,18 @@ Before running this application, you need:
 
 ## Usage
 
-1. Enter your desired text in the text area
-2. Select the conversion mode:
+1. Enter your OpenAI API key in the provided field
+   - Your API key is stored locally in your browser and never sent to our servers
+   - The key is only sent directly to OpenAI's API for processing your requests
+2. Enter your desired text in the text area
+3. Select the conversion mode:
    - **Verbatim TTS**: Converts your exact text to speech (default)
    - **Summary TTS**: First summarizes your text using GPT-4o, then converts the summary to speech
-3. Monitor the character count and estimated cost in real-time
-4. Click the "Show calculation" link to view a detailed breakdown of the cost calculation
-5. Click the "Convert to Speech" button
-6. Wait for the conversion to complete
-7. Use the audio player to listen to the generated speech
+4. Monitor the character count, estimated cost, and processing time in real-time
+5. Click the "Show calculation" link to view a detailed breakdown of the cost calculation
+6. Click the "Convert to Speech" button
+7. Wait for the conversion to complete, watching the real-time queue status and time remaining
+8. Use the audio player to listen to the generated speech
 
 ## Advanced Features
 
@@ -163,6 +166,23 @@ You can run multiple instances of the server simultaneously:
 1. The application automatically detects if the default port (3000) is in use
 2. It will increment and try the next available port (3001, 3002, etc.)
 3. Each instance will log its assigned port at startup
+
+### Client-Side API Key
+
+The application provides a secure way for users to use their own OpenAI API keys:
+1. API keys are entered directly in the browser interface
+2. Keys are stored in the browser's localStorage for convenience
+3. Keys are never sent to the application server - they're only sent directly to OpenAI's API
+4. A toggle button allows users to show/hide their API key for security
+5. This approach eliminates the need to store sensitive API keys on the server
+
+### No Local Storage of Audio Files
+
+This application is designed with privacy and efficiency in mind:
+1. Audio files are never stored on the server
+2. The generated speech is streamed directly to your browser
+3. This approach reduces disk usage and eliminates privacy concerns related to stored audio
+4. The audio is only available during your current session
 
 ## Security Notes
 
