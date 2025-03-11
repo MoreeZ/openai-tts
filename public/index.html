@@ -47,14 +47,213 @@
             margin-top: 10px;
             color: #666;
         }
+        .character-counter {
+            text-align: right;
+            color: #666;
+            margin-top: 5px;
+            font-size: 14px;
+        }
+        .cost-calculator {
+            text-align: right;
+            color: #666;
+            margin-top: 2px;
+            font-size: 14px;
+        }
+        .time-estimate {
+            text-align: right;
+            color: #666;
+            margin-top: 2px;
+            font-size: 14px;
+        }
+        .character-counter.warning {
+            color: #ff9800;
+        }
+        .character-counter.error {
+            color: #f44336;
+        }
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            margin: 15px 0;
+        }
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 60px;
+            height: 34px;
+            margin-right: 10px;
+        }
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 34px;
+        }
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 26px;
+            width: 26px;
+            left: 4px;
+            bottom: 4px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        input:checked + .slider {
+            background-color: #2196F3;
+        }
+        input:checked + .slider:before {
+            transform: translateX(26px);
+        }
+        .mode-description {
+            font-size: 14px;
+            color: #666;
+            margin-left: 10px;
+        }
+        .cost-details {
+            margin-top: 5px;
+            background-color: #f9f9f9;
+            border: 1px solid #eee;
+            border-radius: 4px;
+            padding: 10px;
+            font-size: 14px;
+            color: #333;
+            display: none;
+        }
+        .cost-details.visible {
+            display: block;
+        }
+        .cost-details table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        .cost-details th, .cost-details td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        .cost-details th {
+            background-color: #f2f2f2;
+        }
+        .cost-toggle {
+            background: none;
+            color: #4CAF50;
+            border: none;
+            padding: 0;
+            font: inherit;
+            cursor: pointer;
+            text-decoration: underline;
+            margin-left: 5px;
+        }
+        
+        /* Queue Status Styles */
+        .progress-container {
+            background-color: #f9f9f9;
+            border-radius: 4px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            margin-top: 10px;
+        }
+        .progress-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #eee;
+        }
+        .progress-item:last-child {
+            margin-bottom: 0;
+            padding-bottom: 0;
+            border-bottom: none;
+        }
+        .progress-item span:first-child {
+            font-weight: bold;
+            color: #555;
+        }
+        .progress-item span:last-child {
+            color: #4CAF50;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>Text-to-Speech Converter</h1>
+        
+        <div class="toggle-container">
+            <label class="toggle-switch">
+                <input type="checkbox" id="summaryToggle">
+                <span class="slider"></span>
+            </label>
+            <span id="modeLabel">Mode: Verbatim TTS</span>
+            <span class="mode-description" id="modeDescription">(Converts exact text, max 4096 characters per chunk)</span>
+        </div>
+        
         <textarea id="textInput" placeholder="Enter your text here..."></textarea>
+        <div class="character-counter" id="charCounter">0 characters</div>
+        <div class="cost-calculator" id="costCalculator">
+            Estimated cost: $0.00
+            <button class="cost-toggle" id="costToggle">Show calculation</button>
+        </div>
+        <div class="time-estimate" id="timeEstimate">
+            Estimated processing time: 0 minutes
+        </div>
+        <div class="cost-details" id="costDetails">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Parameter</th>
+                        <th>Value</th>
+                    </tr>
+                </thead>
+                <tbody id="costDetailsTable">
+                    <!-- Cost calculation details will be inserted here -->
+                </tbody>
+            </table>
+        </div>
+        
         <button id="convertBtn">Convert to Speech</button>
         <p id="status"></p>
+        
+        <!-- Queue Status Indicator -->
+        <div id="queueStatusContainer" style="display: none; margin: 15px 0;">
+            <h3>Processing Status</h3>
+            <div class="progress-container">
+                <div class="progress-item">
+                    <span>Total Chunks:</span>
+                    <span id="totalChunks">0</span>
+                </div>
+                <div class="progress-item">
+                    <span>Processed:</span>
+                    <span id="processedChunks">0</span>
+                </div>
+                <div class="progress-item">
+                    <span>In Queue:</span>
+                    <span id="queuedChunks">0</span>
+                </div>
+                <div class="progress-item" id="summaryProgressContainer" style="display: none;">
+                    <span>Summary Progress:</span>
+                    <span id="summaryProgress">0%</span>
+                </div>
+                <div class="progress-item">
+                    <span>Estimated Time Remaining:</span>
+                    <span id="timeRemaining">Calculating...</span>
+                </div>
+            </div>
+        </div>
+        
         <audio id="audioPlayer" controls style="display: none; width: 100%"></audio>
     </div>
     <script src="script.js"></script>
