@@ -304,6 +304,9 @@ app.get('/api/status', (req, res) => {
 
 // Process a text-to-speech request
 app.post('/api/tts', async (req, res) => {
+    // Set headers only once at the beginning
+    res.setHeader('Content-Type', 'application/json');
+    
     try {
         // Get the text and API key from the request
         const { text, apiKey } = req.body;
@@ -425,13 +428,26 @@ app.post('/api/tts', async (req, res) => {
         // Combine all audio buffers
         logger.log('Combining audio chunks...');
         processingStatus.currentStatus = 'Combining audio chunks';
-        const combinedBuffer = concatAudioBuffers(audioBuffers);
+        
+        let combinedBuffer;
+        try {
+            combinedBuffer = concatAudioBuffers(audioBuffers);
+        } catch (combineError) {
+            logger.error('Error combining audio buffers:', combineError);
+            return res.status(500).json({
+                error: `Error combining audio: ${combineError.message}`,
+                details: 'Failed to combine audio chunks into a single file',
+                code: 500,
+                type: 'audio_processing_error'
+            });
+        }
         
         // Set the status to complete
         processingStatus.currentStatus = 'Complete';
         
         // Return the audio data directly as a response
-        res.set('Content-Type', 'audio/mpeg');
+        // Change content type to audio/mpeg only when we're ready to send the audio
+        res.setHeader('Content-Type', 'audio/mpeg');
         return res.send(Buffer.from(combinedBuffer));
         
     } catch (error) {

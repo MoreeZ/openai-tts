@@ -378,55 +378,86 @@ document.addEventListener('DOMContentLoaded', async () => {
             });
 
             if (!response.ok) {
-                const errorData = await response.json();
+                // Check the content type to handle HTML error pages
+                const contentType = response.headers.get('content-type');
                 
-                // Format a detailed error message based on the error type
-                let errorMessage = errorData.error || 'Failed to convert text to speech';
-                
-                // Add specific handling for different error types
-                switch (errorData.type) {
-                    case 'invalid_api_key':
-                        errorMessage = '❌ API Key Error: ' + errorMessage;
-                        errorMessage += '\n\nPlease check that your OpenAI API key is correct and has access to the TTS API.';
-                        break;
-                    case 'insufficient_quota':
-                        errorMessage = '❌ Quota Error: ' + errorMessage;
-                        errorMessage += '\n\nPlease check your OpenAI account billing status and usage limits.';
-                        break;
-                    case 'rate_limit_error':
-                        errorMessage = '❌ Rate Limit Error: ' + errorMessage;
-                        errorMessage += '\n\nThe OpenAI API is currently rate limited. Please wait a moment and try again.';
-                        break;
-                    case 'summary_generation_error':
-                        errorMessage = '❌ Summary Error: ' + errorMessage;
-                        errorMessage += '\n\nThere was a problem generating the summary. Try using verbatim mode instead.';
-                        break;
-                    case 'tts_processing_error':
-                        errorMessage = '❌ TTS Processing Error: ' + errorMessage;
-                        if (errorData.chunk && errorData.totalChunks) {
-                            errorMessage += `\n\nError occurred in chunk ${errorData.chunk} of ${errorData.totalChunks}.`;
-                        }
-                        break;
-                    case 'model_not_found':
-                        errorMessage = '❌ Model Error: ' + errorMessage;
-                        errorMessage += '\n\nYour API key may not have access to the required models.';
-                        break;
-                    default:
-                        errorMessage = '❌ Error: ' + errorMessage;
+                if (contentType && contentType.includes('application/json')) {
+                    // Handle JSON error response
+                    const errorData = await response.json();
+                    
+                    // Format a detailed error message based on the error type
+                    let errorMessage = errorData.error || 'Failed to convert text to speech';
+                    
+                    // Add specific handling for different error types
+                    switch (errorData.type) {
+                        case 'invalid_api_key':
+                            errorMessage = '❌ API Key Error: ' + errorMessage;
+                            errorMessage += '\n\nPlease check that your OpenAI API key is correct and has access to the TTS API.';
+                            break;
+                        case 'insufficient_quota':
+                            errorMessage = '❌ Quota Error: ' + errorMessage;
+                            errorMessage += '\n\nPlease check your OpenAI account billing status and usage limits.';
+                            break;
+                        case 'rate_limit_error':
+                            errorMessage = '❌ Rate Limit Error: ' + errorMessage;
+                            errorMessage += '\n\nThe OpenAI API is currently rate limited. Please wait a moment and try again.';
+                            break;
+                        case 'summary_generation_error':
+                            errorMessage = '❌ Summary Error: ' + errorMessage;
+                            errorMessage += '\n\nThere was a problem generating the summary. Try using verbatim mode instead.';
+                            break;
+                        case 'tts_processing_error':
+                            errorMessage = '❌ TTS Processing Error: ' + errorMessage;
+                            if (errorData.chunk && errorData.totalChunks) {
+                                errorMessage += `\n\nError occurred in chunk ${errorData.chunk} of ${errorData.totalChunks}.`;
+                            }
+                            break;
+                        case 'model_not_found':
+                            errorMessage = '❌ Model Error: ' + errorMessage;
+                            errorMessage += '\n\nYour API key may not have access to the required models.';
+                            break;
+                        default:
+                            errorMessage = '❌ Error: ' + errorMessage;
+                    }
+                    
+                    // Add error code if available
+                    if (errorData.code) {
+                        errorMessage += `\n\nError code: ${errorData.code}`;
+                    }
+                    
+                    // Log detailed error information to console for debugging
+                    console.error('Error details:', errorData);
+                    
+                    throw new Error(errorMessage);
+                } else {
+                    // Handle non-JSON response (like HTML error pages)
+                    const errorText = await response.text();
+                    console.error('Server returned non-JSON response:', errorText);
+                    
+                    // Create a more user-friendly error message
+                    let errorMessage = '❌ Server Error: The server returned an unexpected response format.';
+                    errorMessage += '\n\nThis usually indicates a server-side error or timeout.';
+                    errorMessage += '\n\nPlease try again with a smaller text input or check server logs for details.';
+                    errorMessage += `\n\nStatus: ${response.status} ${response.statusText}`;
+                    
+                    throw new Error(errorMessage);
                 }
-                
-                // Add error code if available
-                if (errorData.code) {
-                    errorMessage += `\n\nError code: ${errorData.code}`;
-                }
-                
-                // Log detailed error information to console for debugging
-                console.error('Error details:', errorData);
-                
-                throw new Error(errorMessage);
+            }
+
+            // Check content type to ensure we received audio data
+            const contentType = response.headers.get('content-type');
+            if (!contentType || !contentType.includes('audio/')) {
+                console.error('Server returned non-audio content type:', contentType);
+                throw new Error('❌ Error: Server returned an invalid response format. Expected audio data but received something else.');
             }
 
             const audioBlob = await response.blob();
+            
+            // Verify we got a valid audio blob
+            if (audioBlob.size === 0) {
+                throw new Error('❌ Error: Received empty audio data from the server.');
+            }
+            
             const audioUrl = URL.createObjectURL(audioBlob);
             
             audioPlayer.src = audioUrl;
