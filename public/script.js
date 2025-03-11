@@ -379,7 +379,51 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             if (!response.ok) {
                 const errorData = await response.json();
-                throw new Error(errorData.error || 'Failed to convert text to speech');
+                
+                // Format a detailed error message based on the error type
+                let errorMessage = errorData.error || 'Failed to convert text to speech';
+                
+                // Add specific handling for different error types
+                switch (errorData.type) {
+                    case 'invalid_api_key':
+                        errorMessage = '❌ API Key Error: ' + errorMessage;
+                        errorMessage += '\n\nPlease check that your OpenAI API key is correct and has access to the TTS API.';
+                        break;
+                    case 'insufficient_quota':
+                        errorMessage = '❌ Quota Error: ' + errorMessage;
+                        errorMessage += '\n\nPlease check your OpenAI account billing status and usage limits.';
+                        break;
+                    case 'rate_limit_error':
+                        errorMessage = '❌ Rate Limit Error: ' + errorMessage;
+                        errorMessage += '\n\nThe OpenAI API is currently rate limited. Please wait a moment and try again.';
+                        break;
+                    case 'summary_generation_error':
+                        errorMessage = '❌ Summary Error: ' + errorMessage;
+                        errorMessage += '\n\nThere was a problem generating the summary. Try using verbatim mode instead.';
+                        break;
+                    case 'tts_processing_error':
+                        errorMessage = '❌ TTS Processing Error: ' + errorMessage;
+                        if (errorData.chunk && errorData.totalChunks) {
+                            errorMessage += `\n\nError occurred in chunk ${errorData.chunk} of ${errorData.totalChunks}.`;
+                        }
+                        break;
+                    case 'model_not_found':
+                        errorMessage = '❌ Model Error: ' + errorMessage;
+                        errorMessage += '\n\nYour API key may not have access to the required models.';
+                        break;
+                    default:
+                        errorMessage = '❌ Error: ' + errorMessage;
+                }
+                
+                // Add error code if available
+                if (errorData.code) {
+                    errorMessage += `\n\nError code: ${errorData.code}`;
+                }
+                
+                // Log detailed error information to console for debugging
+                console.error('Error details:', errorData);
+                
+                throw new Error(errorMessage);
             }
 
             const audioBlob = await response.blob();
@@ -398,8 +442,16 @@ document.addEventListener('DOMContentLoaded', async () => {
                 audioPlayer.dataset.previousUrl = audioUrl;
             };
         } catch (error) {
-            status.textContent = `Error: ${error.message || 'Failed to convert text to speech.'}`;
-            logger.error('Error:', error);
+            // Format the status message for better readability
+            const errorMessage = error.message || 'Failed to convert text to speech.';
+            
+            // Create a formatted status message with line breaks for the UI
+            status.innerHTML = errorMessage.replace(/\n/g, '<br>');
+            
+            // Log the full error to console
+            console.error('Error:', error);
+            
+            // Stop status polling
             stopStatusPolling();
         } finally {
             convertBtn.disabled = false;

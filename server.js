@@ -305,17 +305,18 @@ app.get('/api/status', (req, res) => {
 // Process a text-to-speech request
 app.post('/api/tts', async (req, res) => {
     try {
-        const { text, useSummary, apiKey } = req.body;
+        // Get the text and API key from the request
+        const { text, apiKey } = req.body;
         
         if (!text) {
-            return res.status(400).json({ error: 'No text provided' });
+            return res.status(400).json({ error: 'No text provided. Please enter some text to convert to speech.' });
         }
         
         if (!apiKey) {
-            return res.status(400).json({ error: 'No API key provided' });
+            return res.status(400).json({ error: 'No API key provided. Please enter your OpenAI API key.' });
         }
         
-        // Initialize OpenAI client with the provided API key
+        // Initialize OpenAI with the provided API key
         openai = new OpenAI({
             apiKey: apiKey
         });
@@ -330,6 +331,7 @@ app.post('/api/tts', async (req, res) => {
         };
         
         // Process the text (either directly or via summary)
+        const useSummary = req.body.useSummary === true;
         let textToProcess = text;
         
         if (useSummary) {
@@ -342,12 +344,22 @@ app.post('/api/tts', async (req, res) => {
                 logger.log(`Text truncated to ${MAX_SUMMARY_INPUT_LENGTH} characters for summarization`);
             }
             
-            // Generate summary
-            const summary = await generateSummary(textToProcess, apiKey);
-            textToProcess = summary;
-            
-            processingStatus.currentStatus = 'Summary generation complete, preparing for TTS processing';
-            logger.log('Summary generated. Length:', textToProcess.length);
+            try {
+                // Generate summary
+                const summary = await generateSummary(textToProcess, apiKey);
+                textToProcess = summary;
+                
+                processingStatus.currentStatus = 'Summary generation complete, preparing for TTS processing';
+                logger.log('Summary generated. Length:', textToProcess.length);
+            } catch (summaryError) {
+                logger.error('Error generating summary:', summaryError);
+                return res.status(500).json({ 
+                    error: `Error generating summary: ${summaryError.message}`,
+                    details: summaryError.response?.data || 'No additional details available',
+                    code: summaryError.response?.status || 500,
+                    type: 'summary_generation_error'
+                });
+            }
         }
         
         // Split text into chunks if needed
@@ -372,9 +384,41 @@ app.post('/api/tts', async (req, res) => {
                 processingStatus.currentStatus = `Processed chunk ${i + 1} of ${chunks.length}`;
                 
                 logger.log(`Chunk ${i + 1}/${chunks.length} processed`);
-            } catch (error) {
-                logger.error(`Error processing chunk ${i + 1}:`, error);
-                throw new Error(`Error processing chunk ${i + 1}: ${error.message}`);
+            } catch (chunkError) {
+                logger.error(`Error processing chunk ${i + 1}:`, chunkError);
+                
+                // Provide detailed error information
+                let errorMessage = `Error processing chunk ${i + 1}: ${chunkError.message}`;
+                let errorDetails = 'No additional details available';
+                let errorCode = 500;
+                let errorType = 'tts_processing_error';
+                
+                // Extract OpenAI API error details if available
+                if (chunkError.response?.data) {
+                    errorDetails = chunkError.response.data;
+                    errorCode = chunkError.response.status || 500;
+                    
+                    // Check for common OpenAI error types
+                    if (chunkError.message.includes('Rate limit')) {
+                        errorType = 'rate_limit_error';
+                        errorMessage = 'OpenAI API rate limit exceeded. Please try again in a few seconds.';
+                    } else if (chunkError.message.includes('invalid_api_key')) {
+                        errorType = 'invalid_api_key';
+                        errorMessage = 'The provided OpenAI API key is invalid. Please check your API key and try again.';
+                    } else if (chunkError.message.includes('insufficient_quota')) {
+                        errorType = 'insufficient_quota';
+                        errorMessage = 'Your OpenAI account has insufficient quota. Please check your usage and billing information.';
+                    }
+                }
+                
+                return res.status(errorCode).json({ 
+                    error: errorMessage,
+                    details: errorDetails,
+                    code: errorCode,
+                    type: errorType,
+                    chunk: i + 1,
+                    totalChunks: chunks.length
+                });
             }
         }
         
@@ -392,7 +436,43 @@ app.post('/api/tts', async (req, res) => {
         
     } catch (error) {
         logger.error('Error processing text:', error);
-        return res.status(500).json({ error: `Error processing text: ${error.message}` });
+        
+        // Determine the appropriate error message and code
+        let statusCode = 500;
+        let errorMessage = `Error processing text: ${error.message}`;
+        let errorDetails = 'No additional details available';
+        let errorType = 'general_error';
+        
+        // Extract OpenAI API error details if available
+        if (error.response?.data) {
+            errorDetails = error.response.data;
+            statusCode = error.response.status || 500;
+            
+            // Check for common OpenAI error types
+            if (error.message.includes('Rate limit')) {
+                errorType = 'rate_limit_error';
+                errorMessage = 'OpenAI API rate limit exceeded. Please try again in a few seconds.';
+            } else if (error.message.includes('invalid_api_key')) {
+                errorType = 'invalid_api_key';
+                errorMessage = 'The provided OpenAI API key is invalid. Please check your API key and try again.';
+                statusCode = 401;
+            } else if (error.message.includes('insufficient_quota')) {
+                errorType = 'insufficient_quota';
+                errorMessage = 'Your OpenAI account has insufficient quota. Please check your usage and billing information.';
+                statusCode = 402;
+            } else if (error.message.includes('model_not_found')) {
+                errorType = 'model_not_found';
+                errorMessage = 'The requested OpenAI model was not found. This may be due to an outdated API version or missing access permissions.';
+                statusCode = 404;
+            }
+        }
+        
+        return res.status(statusCode).json({ 
+            error: errorMessage,
+            details: errorDetails,
+            code: statusCode,
+            type: errorType
+        });
     }
 });
 
