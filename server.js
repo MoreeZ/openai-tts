@@ -14,6 +14,17 @@ const defaultPort = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
+
+// Add cache-busting middleware
+app.use((req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Surrogate-Control', 'no-store');
+    res.setHeader('X-Version', 'March-11-2025-0123');
+    next();
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Custom console logger with timestamps
@@ -525,6 +536,84 @@ async function processText(text, apiKey) {
 app.get('/', (req, res) => {
     logger.log('Serving index.html');
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Add a new endpoint that will definitely bypass caching
+app.get('/latest-version', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Surrogate-Control', 'no-store');
+    res.setHeader('X-Version', 'March-11-2025-0125');
+    
+    res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>OpenAI TTS - Latest Version (March 11, 2025 at 01:25)</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                line-height: 1.6;
+                margin: 0;
+                padding: 20px;
+                background-color: #f5f5f5;
+                color: #333;
+            }
+            .container {
+                max-width: 800px;
+                margin: 0 auto;
+                background-color: #fff;
+                padding: 20px;
+                border-radius: 5px;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            }
+            h1 {
+                color: #2c3e50;
+                border-bottom: 2px solid #3498db;
+                padding-bottom: 10px;
+            }
+            .version {
+                background-color: #e74c3c;
+                color: white;
+                padding: 10px;
+                border-radius: 5px;
+                font-weight: bold;
+                margin-bottom: 20px;
+            }
+            .links {
+                margin-top: 30px;
+            }
+            .links a {
+                display: inline-block;
+                margin-right: 15px;
+                color: #3498db;
+                text-decoration: none;
+            }
+            .links a:hover {
+                text-decoration: underline;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>OpenAI TTS Web Interface</h1>
+            <div class="version">
+                LATEST VERSION: March 11, 2025 at 01:25 UTC
+            </div>
+            <p>This is a special page created to verify you're seeing the latest version of the application.</p>
+            <p>If you can see this page, it means you're successfully accessing the updated version of the OpenAI TTS application.</p>
+            
+            <div class="links">
+                <a href="/">Go to Main Application</a>
+                <a href="/api/status">Check API Status</a>
+            </div>
+        </div>
+    </body>
+    </html>
+    `);
 });
 
 // Start the server on an available port
